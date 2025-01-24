@@ -3,7 +3,6 @@ import cv2
 import base64
 import numpy as np
 import sqlite3
-import os
 from flask import Flask, render_template
 from flask_socketio import SocketIO
 from sklearn.metrics.pairwise import cosine_similarity
@@ -28,25 +27,36 @@ def initialize_database():
     """)
     conn.commit()
     conn.close()
+    print("Database initialized.")
 
 # Save embedding to database
 def save_embedding_to_database(name, embedding):
-    conn = sqlite3.connect(DATABASE_PATH)
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO faces (name, embedding) VALUES (?, ?)", (name, embedding.tobytes()))
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO faces (name, embedding) VALUES (?, ?)", (name, embedding.tobytes()))
+        conn.commit()
+        print(f"Saved embedding for {name} to database.")
+    except Exception as e:
+        print(f"Error saving embedding to database: {e}")
+    finally:
+        conn.close()
 
 # Load embeddings from database
 def load_embeddings_from_database():
-    conn = sqlite3.connect(DATABASE_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT name, embedding FROM faces")
-    data = cursor.fetchall()
-    conn.close()
-    return [(row[0], np.frombuffer(row[1], dtype=np.float32)) for row in data]
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT name, embedding FROM faces")
+        data = cursor.fetchall()
+        return [(row[0], np.frombuffer(row[1], dtype=np.float32)) for row in data]
+    except Exception as e:
+        print(f"Error loading embeddings from database: {e}")
+        return []
+    finally:
+        conn.close()
 
-# Dummy feature extractor (replace with a real model or algorithm like SIFT, HOG, or FaceNet)
+# Feature extractor using HOG (placeholder, replace with advanced model if needed)
 def extract_features(image):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     hog = cv2.HOGDescriptor()
@@ -58,12 +68,23 @@ def index():
 
 @socketio.on('video_frame')
 def handle_video_frame(data):
-    # Decode base64 image
-    img_data = base64.b64decode(data.split(',')[1])
-    np_img = np.frombuffer(img_data, dtype=np.uint8)
-    frame = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
+    print("Received video frame.")
 
-    # Extract features
+    # Decode base64 image
+    try:
+        img_data = base64.b64decode(data.split(',')[1])
+        np_img = np.frombuffer(img_data, dtype=np.uint8)
+        frame = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
+    except Exception as e:
+        print(f"Error decoding image: {e}")
+        return
+
+    # Verify the frame is valid
+    if frame is None:
+        print("Error: Frame is None after decoding.")
+        return
+
+    print("Extracting features...")
     embedding = extract_features(frame)
 
     # Check if embedding is unique
@@ -73,8 +94,7 @@ def handle_video_frame(data):
     )
 
     if is_unique:
-        # Save the embedding to the database
-        name = f"Person_{len(embeddings) + 1}"  # You can adjust naming logic
+        name = f"Person_{len(embeddings) + 1}"  # Assign a unique name
         save_embedding_to_database(name, embedding)
         print(f"Saved unique face embedding for {name}.")
     else:
@@ -84,13 +104,5 @@ if __name__ == '__main__':
     # Initialize database
     initialize_database()
 
-    # Define paths to your SSL certificate and key
-    cert_file = 'certificates/certificate.crt'
-    key_file = 'certificates/private.key'
-
-    # Create an SSL context
-    ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-    ssl_context.load_cert_chain(certfile=cert_file, keyfile=key_file)
-
-    # Use Werkzeug server with SSL
-    socketio.run(app, host='0.0.0.0', port=5000, ssl_context=ssl_context)
+    # Run the Flask server
+    socketio.run(app, host='0.0.0.0', port=5000)
